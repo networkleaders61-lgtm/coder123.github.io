@@ -1,11 +1,10 @@
 import os
 import io
+import json
+import requests
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
-from pydantic import BaseModel, Field
-from typing import List
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,18 +18,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-class TailoredResponse(BaseModel):
-    match_percentage: int = Field(description="A score from 0 to 100 matching the resume to the job.")
-    missing_skills: List[str] = Field(description="Key skills missing from the resume.")
-    improved_bullet_points: List[str] = Field(description="3-5 highly optimized tailored bullet points.")
-    mock_interview_questions: List[str] = Field(description="3 highly targeted interview questions.")
-
-@app.post("/api/tailor", response_model=TailoredResponse)
+@app.post("/api/tailor")
 async def tailor_resume(file: UploadFile, job_description: str = Form(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    
     try:
         contents = await file.read()
         pdf_reader = PdfReader(io.BytesIO(contents))
@@ -39,18 +31,33 @@ async def tailor_resume(file: UploadFile, job_description: str = Form(...)):
         if not resume_text.strip():
             raise HTTPException(status_code=400, detail="Could not read PDF text.")
 
-        system_prompt = "You are an expert recruiter. Analyze the resume against the job description. Give a match score, missing skills, improved bullet points, and 3 interview questions."
+        system_prompt = (
+            "You are an expert recruiter. Analyze the resume against the job description. "
+            "You MUST respond ONLY with a valid JSON object matching this structure: "
+            '{"match_percentage": 85, "missing_skills": ["Skill1"], "improved_bullet_points": ["Bullet1"], "mock_interview_questions": ["Q1"]}'
+        )
+        
         user_content = f"JOB:\n{job_description}\n\nRESUME:\n{resume_text}"
 
-        completion = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            response_format=TailoredResponse,
+        response = requests.post(
+            url="https://openrouter.ai",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                "Content-Type": "application/json"
+            },
+            data=json.dumps({
+                "model": "google/gemini-2.5-flash",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                "response_format": {"type": "json_object"}
+            })
         )
-        return completion.choices.message.parsed
+        
+        result_json = response.json()
+        ai_response_string = result_json['choices']['message']['content']
+        return json.loads(ai_response_string)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
