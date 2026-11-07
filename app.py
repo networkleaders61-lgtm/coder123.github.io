@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
 from pydantic import BaseModel, Field
 from typing import List
-from openai import OpenAI
+
 from dotenv import load_dotenv
 
 load_dotenv()
